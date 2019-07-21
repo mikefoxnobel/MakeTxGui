@@ -17,7 +17,7 @@ namespace MakeTxGui.ViewModels
     public class MakeTxViewModel : BindableBase
     {
         #region Field
-        private Dispatcher _dispatcher;
+        private readonly Dispatcher _dispatcher;
         private string _sourcePath;
         private string _targetPath;
         private bool _isTargetDifferent = false;
@@ -26,16 +26,16 @@ namespace MakeTxGui.ViewModels
         private bool _toStop = true;
         private double _progress = 0;
 
-        private ObservableCollection<string> _allFiles = new ObservableCollection<string>();
-        private ObservableCollection<string> _selectedFiles = new ObservableCollection<string>();
-        private ObservableCollection<string> _allFilesSelected = new ObservableCollection<string>();
-        private ObservableCollection<string> _selectedFilesSelected = new ObservableCollection<string>();
+        private readonly ObservableCollection<string> _allFiles = new ObservableCollection<string>();
+        private readonly ObservableCollection<string> _selectedFiles = new ObservableCollection<string>();
+        private readonly ObservableCollection<string> _allFilesSelected = new ObservableCollection<string>();
+        private readonly ObservableCollection<string> _selectedFilesSelected = new ObservableCollection<string>();
 
         private int _totalFileCount;
         private int _processedFileCount;
-        private string[] _filterExtensions = { ".bmp", ".jpg", ".jpeg", ".tif", ".tiff", ".png", ".ico", ".icon", ".gif", ".tga", ".exr" };
+        private readonly string[] _filterExtensions = { ".bmp", ".jpg", ".jpeg", ".tif", ".tiff", ".png", ".ico", ".icon", ".gif", ".tga", ".exr" };
 
-        private MakeTxHelper _makeTxHelper;
+        private readonly MakeTxHelper _makeTxHelper;
         #endregion
 
         #region Property
@@ -46,7 +46,7 @@ namespace MakeTxGui.ViewModels
             {
                 if (SetProperty(ref _sourcePath, value))
                 {
-                    OnSourcePathChanged();
+                    this.OnSourcePathChanged().ConfigureAwait(true);
                 }
             }
         }
@@ -70,7 +70,7 @@ namespace MakeTxGui.ViewModels
             {
                 if (SetProperty(ref _isIncludeSubDirectory, value))
                 {
-                    OnIncludeSubDirectoryChanged();
+                    this.OnIncludeSubDirectoryChanged().ConfigureAwait(true);
                 }
             }
         }
@@ -161,36 +161,56 @@ namespace MakeTxGui.ViewModels
             }
         }
 
-        private void OnSelectAll()
+        private async void OnSelectAll()
         {
-            SelectedFiles.AddRange(AllFiles.Where(f => !SelectedFiles.Contains(f))).OrderBy(f => f);
-        }
-
-        private void OnUnselectAll()
-        {
-            SelectedFiles.Clear();
-        }
-
-        private void OnSelect()
-        {
-            SelectedFiles.AddRange(AllFilesSelected.Where(f => !SelectedFiles.Contains(f))).OrderBy(f => f);
-        }
-
-        private void OnUnselect()
-        {
-            List<string> filesToRemove = SelectedFilesSelected.ToList();
-            foreach (string f in filesToRemove)
+            await Task.Run(() =>
             {
-                SelectedFiles.Remove(f);
-            }
+                foreach (string filename in this.AllFiles.Where(f => !this.SelectedFiles.Contains(f)).OrderBy(f => f))
+                {
+                    this._dispatcher.Invoke(() => { this.SelectedFiles.Add(filename); });
+                }
+            });
         }
 
-        private void OnProcess()
+        private async void OnUnselectAll()
+        {
+            await Task.Run(() =>
+            {
+                this._dispatcher.Invoke(() => SelectedFiles.Clear());
+            }).ConfigureAwait(true);
+        }
+
+        private async void OnSelect()
+        {
+            await Task.Run(() =>
+            {
+                this._dispatcher.Invoke(() =>
+                {
+                    foreach (string filename in this.AllFilesSelected.Where(f => !this.SelectedFiles.Contains(f)).OrderBy(f => f))
+                    {
+                        this._dispatcher.Invoke(() => this.SelectedFiles.Add(filename));
+                    }
+                });
+            }).ConfigureAwait(true);
+        }
+
+        private async void OnUnselect()
+        {
+            await Task.Run(() =>
+            {
+                List<string> filesToRemove = SelectedFilesSelected.ToList();
+                foreach (string f in filesToRemove)
+                {
+                    this._dispatcher.Invoke(() => this.SelectedFiles.Remove(f));
+                }
+            });
+        }
+
+        private async void OnProcess()
         {
             if (!IsProcessing)
             {
-                Task task = new Task(ProcessFiles);
-                task.Start();
+                await this.ProcessFiles();
             }
             else
             {
@@ -202,64 +222,91 @@ namespace MakeTxGui.ViewModels
 
         public MakeTxViewModel()
         {
+            this._dispatcher = Dispatcher.CurrentDispatcher;
             SourcePath = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
             _makeTxHelper = new MakeTxHelper();
         }
 
-        private void OnSourcePathChanged()
+        private async Task OnSourcePathChanged()
         {
             if (!IsTargetDifferent)
             {
                 TargetPath = SourcePath;
             }
 
-            GetFileList();
+            await this.RefreshFileList().ConfigureAwait(true);
         }
 
-        private void OnIncludeSubDirectoryChanged()
+        private async Task OnIncludeSubDirectoryChanged()
         {
-            GetFileList();
+            await this.RefreshFileList().ConfigureAwait(true);
         }
 
-        private void GetFileList()
+        private async Task RefreshFileList()
         {
-            AllFiles.Clear();
-            SelectedFiles.Clear();
+            await Task.Run(() =>
+            {
+                this._dispatcher.Invoke(() =>
+                {
+                    AllFiles.Clear();
+                    SelectedFiles.Clear();
+                });
+
+                foreach (string filename in GetFileList())
+                {
+                    this._dispatcher.Invoke(() => { AllFiles.Add(filename); });
+                }
+
+            }).ConfigureAwait(true);
+        }
+
+        private IEnumerable<string> GetFileList()
+        {
             DirectoryInfo di = new DirectoryInfo(_sourcePath);
             if (di.Exists)
             {
-                FileInfo[] files = di.GetFiles("*.*", _isIncludeSubDirectory ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
-                IEnumerable<string> filteredFiles = from FileInfo file in files
-                                                    where _filterExtensions.Contains(file.Extension.ToLower())
-                                                    select file.FullName.Substring(_sourcePath.Length + 1);
+                IEnumerable<string> filteredFiles = di.EnumerateFiles("*.*", _isIncludeSubDirectory ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
+                    .Where(file => _filterExtensions.Contains(file.Extension.ToLower()))
+                    .Select(file => file.FullName.Substring(_sourcePath.Length + 1));
 
-                AllFiles.AddRange(filteredFiles);
+                foreach (string filename in filteredFiles)
+                {
+                    yield return filename;
+                }
             }
             else
             {
-
+                yield break;
             }
         }
 
-        private void ProcessFiles()
+        private async Task ProcessFiles()
         {
-            _toStop = false;
-            IsEnabled = false;
-            TotalFileCount = SelectedFiles.Count;
-            ProcessedFileCount = 0;
-            foreach (string f in SelectedFiles)
+            await Task.Run(() =>
             {
-                string sourceFullFilename = Path.Combine(SourcePath, f);
-                string targetFullFilename = Path.Combine(TargetPath, f.Remove(f.LastIndexOf(".")) + ".tx");
-                List<string> stdout, errout;
-                int result = _makeTxHelper.CallMakeTx(out stdout, out errout, sourceFullFilename, targetFullFilename);
-                ProcessedFileCount++;
-                if (_toStop)
+                _toStop = false;
+                this._dispatcher.Invoke(() =>
                 {
-                    break;
-                }
-            }
-            IsEnabled = true;
+                    this.IsEnabled = false;
+                    this.TotalFileCount = this.SelectedFiles.Count;
+                    this.ProcessedFileCount = 0;
+                });
+
+                Parallel.ForEach(this.SelectedFiles, (f, state) =>
+                {
+                    string sourceFullFilename = Path.Combine(SourcePath, f);
+                    string targetFullFilename = Path.Combine(TargetPath, f.Remove(f.LastIndexOf(".")) + ".tx");
+                    List<string> stdout, errout;
+                    int result = _makeTxHelper.CallMakeTx(out stdout, out errout, sourceFullFilename, targetFullFilename);
+                    this._dispatcher.Invoke(() => this.ProcessedFileCount++);
+                    if (_toStop)
+                    {
+                        state.Break();
+                    }
+                });
+
+                IsEnabled = true;
+            });
         }
     }
 }
